@@ -40,7 +40,7 @@ class XMLValues(object):
         self.segment_pepoch = segment_pepoch
 
 def period_correction_for_prepfold(p0,pdot,tsamp,fft_size):
-    return p0 - pdot*float(fft_size)*tsamp/2.
+    return p0 - pdot*fft_size*tsamp/2.
 
 def f0_correction_for_prepfold(f0,fdot,tsamp,fft_size):
     return f0 + fdot*float(fft_size)*tsamp/2.
@@ -63,7 +63,7 @@ def calculate_spin(f=None, fdot=None, p=None, pdot=None):
         return f, fdot, p, pdot, a
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Prepare for multibeam folds")
+    parser = argparse.ArgumentParser(description="Prepare for multibeam folds - generate prepfold commands to fold same beams, psrfold commands to fold all overlapping and neighbouring beams")
     parser.add_argument(
         "--cands",
         type=str,
@@ -99,7 +99,13 @@ def parse_args():
         help="Path to overlap csv file"
     )
 
-
+    parser.add_argument(
+        "--use_search",
+        action='store_true',
+        required=False,
+        default=False,
+        help="Use search candidate details instead of optimised fold values"
+    )
 
     return parser.parse_args()
 
@@ -107,7 +113,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-
+    os.makedirs(args.output_root, exist_ok=True)
     t1_df = pd.read_csv(args.cands)
     fold_ids = t1_df['fold_candidate_id_bin']
 
@@ -209,30 +215,53 @@ if __name__ == "__main__":
     t1_df['fold_ids_hex'] = t1_df['fold_candidate_id_bin'].apply(lambda x: uuid.UUID(x).hex.upper())
     fold_candidate_df = fold_candidate_df.merge(t1_df[['fold_ids_hex', 'f0_usr', 'f1_user', 'dm_user', 'beam_name']], left_on='foldcand_hex', right_on='fold_ids_hex', how='inner')
 
-    fold_candidate_df["corrected_f0"]  = fold_candidate_df.apply(
-        lambda row: f0_correction_for_prepfold(row['f0_usr'], row['f1_user'], row['tsamp'], row['fft_size']),
-        axis=1
-    )
+    #rename user values to search
+    fold_candidate_df.rename(columns={'f0_usr': 'f0_search', 'f1_user': 'f1_search', 'dm_user': 'dm_search'}, inplace=True)
+
+
+
+    fold_candidate_df["corrected_spin_period"]  = period_correction_for_prepfold(fold_candidate_df['spin_period'], fold_candidate_df['pdot'], fold_candidate_df['tsamp'], fold_candidate_df['fft_size'])
+
 
     fold_candidate_df.rename(columns={'beam_name': 'beam'}, inplace=True)
 
     print("Successfully merged fold candidate information with XML data")
 
-    fold_candidate_df["prepfold_cmd"] = fold_candidate_df.apply(
-        lambda row: (
-            f"prepfold -topo -ncpus 2 -fixchi -noxwin"
-            f" -dm {row['dm_user']} "
-            f" -n 64 -nsub 64 "
-            f" -f {row['corrected_f0']}"
-            f" -fd {row['f1_user']} "
-        ),
-        axis=1
-    )
+    if args.use_search:
+
+        fold_candidate_df["corrected_f0_search"]  = fold_candidate_df.apply(
+            lambda row: f0_correction_for_prepfold(row['f0_search'], row['f1_search'], row['tsamp'], row['fft_size']),
+            axis=1
+        )
 
 
+        fold_candidate_df["prepfold_cmd"] = fold_candidate_df.apply(
+            lambda row: (
+                f"prepfold -topo -ncpus 2 -fixchi -noxwin"
+                f" -dm {row['dm_search']} "
+                f" -n 64 -nsub 64 "
+                f" -f {row['corrected_f0_search']}"
+                f" -fd {row['f1_search']} "
+            ),
+            axis=1
+        )
+    else:
+        fold_candidate_df["prepfold_cmd"] = fold_candidate_df.apply(
+            lambda row: (
+                f"prepfold -topo -ncpus 2 -fixchi -noxwin"
+                f" -dm {row['dm']} "
+                f" -n 64 -nsub 64 "
+                f" -p {row['corrected_spin_period']}"
+                f" -pd {row['pdot']} "
+            ),
+            axis=1
+        )
+
+
+    value_suffix = 'search-vals' if args.use_search else 'fold-vals'
 
     csv_df = fold_candidate_df 
-    prepfold_csv_name = args.output_root + "/" + args.out_prefix +'_prepfold_cmds.csv'
+    prepfold_csv_name = args.output_root + "/" + args.out_prefix +'_prepfold_cmds_'  + value_suffix  + '.csv'
     csv_df.to_csv(prepfold_csv_name, index=False)
 
     print(f"Successfully wrote prepfold commands to {prepfold_csv_name}")
@@ -279,11 +308,17 @@ if __name__ == "__main__":
     idx=0
     for key, value in folds_per_beam_per_dm.items():
         beam, dm = key
-        candfile = os.path.join(fold_root, f"{beam}_{dm:.02f}.candfile")
-        with open(candfile, 'w') as f:
-            f.write("#id DM accel F0 F1 F2 S/N\n")
-            for i, row in value.iterrows():
-                f.write(f"{i} {row['dm']} 0 {row['f0_usr']} {row['f1_user']} 0 {row['fold_snr']}\n")
+        candfile = os.path.join(fold_root, f"{beam}_{dm:.02f}_{value_suffix}.candfile")
+        with open(candfile, 'w') as cand_file_writer:
+            cand_file_writer.write("#id DM accel F0 F1 F2 S/N\n")
+            if args.use_search:
+                for i, row in value.iterrows():
+                    f, fdot, p, pdot, a = calculate_spin(f=row['f0_search'], fdot=row['f1_search'])
+                    cand_file_writer.write(f"{i} {row['dm_search']} {a} {f} {fdot} 0 {row['fold_snr']}\n")
+            else:
+                for i, row in value.iterrows():
+                    f, fdot, p, pdot, a = calculate_spin(p=row['corrected_spin_period'], pdot=row['pdot'])
+                    cand_file_writer.write(f"{i} {row['dm']} {a} {f} {fdot} 0 {row['fold_snr']}\n")
 
         fil_files = glob.glob(f"{beam_root}/*/{beam}/*idm_{dm:09.3f}_{beam}*.fil")
         psrfold_cmd = f"psrfold_fil --plotx -v --render --candfile {candfile} \
