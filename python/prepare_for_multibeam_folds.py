@@ -43,7 +43,7 @@ def period_correction_for_prepfold(p0,pdot,tsamp,fft_size):
     return p0 - pdot*fft_size*tsamp/2.
 
 def f0_correction_for_prepfold(f0,fdot,tsamp,fft_size):
-    return f0 + fdot*float(fft_size)*tsamp/2.
+    return f0 - fdot*float(fft_size)*tsamp/2.
 
 
 def calculate_spin(f=None, fdot=None, p=None, pdot=None):
@@ -54,7 +54,7 @@ def calculate_spin(f=None, fdot=None, p=None, pdot=None):
         # calculate f and fdot from p and pdot
         elif p is not None and pdot is not None:
             f = 1 / p
-            fdot = -pdot * (p**2)
+            fdot = -pdot / (p**2)
         else:
             raise ValueError("Either (f, fdot) or (p, pdot) must be provided")
         
