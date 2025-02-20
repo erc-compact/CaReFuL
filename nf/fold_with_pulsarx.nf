@@ -30,7 +30,7 @@ process refold_with_pulsarx {
     beam_num=\$(echo $beam | awk -F_ '{print \$NF}')
 
     final_prefix="${beam_dm_str}_\$(echo $additional_flags | sed -e s/-//g | tr -s ' ' '_' | sed -e s/search//g)_${start_frac}_${end_frac}"
-    $psrfold_cmd $additional_flags --frac ${start_frac} ${end_frac} -o \$final_prefix -L \$L -i \${beam_num}
+    $psrfold_cmd $additional_flags --frac ${start_frac} ${end_frac} -o \$final_prefix -L \$L -i \${beam_num} -t ${task.cpus}
     """
 
 }
