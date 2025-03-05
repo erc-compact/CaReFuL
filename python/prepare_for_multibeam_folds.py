@@ -59,7 +59,7 @@ def calculate_spin(f=None, fdot=None, p=None, pdot=None):
             raise ValueError("Either (f, fdot) or (p, pdot) must be provided")
         
         a = pdot / p * speed_of_light
-            
+        
         return f, fdot, p, pdot, a
 
 def parse_args():
@@ -117,6 +117,7 @@ if __name__ == "__main__":
     t1_df = pd.read_csv(args.cands)
     fold_ids = t1_df['fold_candidate_id_bin']
 
+
     print(f"Successfully read {len(t1_df.index)} T1 candidates")
 
     fold_ids_hex = [f"\"{uuid.UUID(x).hex}\"" for x in fold_ids]
@@ -124,16 +125,16 @@ if __name__ == "__main__":
     fold_candidate_df = pd.read_sql_query(f"""
         SELECT 
         HEX(f.id) AS foldcand_hex,
-        f.spin_period, f.pdot, f.dm, f.fold_snr, f.filepath, f.filepath, HEX(f.dp_id) AS dp_hex, HEX(f.search_candidate_id) AS sc_hex
+        (f.spin_period_ms +0.0) as spin_period_ms, f.pdot, f.dm, f.fold_snr, f.acc, f.filepath, f.filepath, HEX(f.dp_id) AS dp_hex, HEX(f.search_candidate_id) AS sc_hex
                                         
         FROM fold_candidate f
         WHERE HEX(f.id) IN ({fold_id_list_str})
     """, engine)
 
+    fold_candidate_df['spin_period'] = fold_candidate_df['spin_period_ms'] / 1000.0
+
     print("Obtained relevant fold candidate information from database")
-
-
-
+    
     foldcand_xml_map_df = pd.read_sql_query(text(f"""
         SELECT 
         HEX(f.id)           AS foldcand_hex,
@@ -314,16 +315,16 @@ if __name__ == "__main__":
             if args.use_search:
                 for i, row in value.iterrows():
                     f, fdot, p, pdot, a = calculate_spin(f=row['f0_search'], fdot=row['f1_search'])
-                    cand_file_writer.write(f"{i} {row['dm_search']} {a} {f} {fdot} 0 {row['fold_snr']}\n")
+                    cand_file_writer.write(f"{i} {row['dm_search']} {a} {f} 0 0 {row['fold_snr']}\n")
             else:
                 for i, row in value.iterrows():
-                    f, fdot, p, pdot, a = calculate_spin(p=row['corrected_spin_period'], pdot=row['pdot'])
-                    cand_file_writer.write(f"{i} {row['dm']} {a} {f} {fdot} 0 {row['fold_snr']}\n")
+                    f, fdot, p, pdot, a = calculate_spin(p=row['spin_period'], pdot=row['pdot'])
+                    cand_file_writer.write(f"{i} {row['dm']} {row['acc']} {1/row['spin_period']} 0 0 {row['fold_snr']}\n")
 
         fil_files = glob.glob(f"{beam_root}/*/{beam}/*idm_{dm:09.3f}_{beam}*.fil")
-        psrfold_cmd = f"psrfold_fil --plotx -v --render --candfile {candfile} \
+        psrfold_cmd = f"psrfold_fil2 -v --render --candfile {candfile} \
         -z zap 552.0 553.0 -z zap 926.0 927.0 -z zap 934.0 952.0 -z zap 1036.0 1037.0 -z zap 1062.0 1063.0 -z zap 1079.0 1080.0    \
-        --template /home/pulsarx/software/PulsarX/include/template/meerkat_fold_UHF.template --clfd 2.0 --rfi zdot --pepoch  {row['segment_pepoch']} -n 64 -b 128 -f {' '.join(fil_files)}"
+        --template /b/u/vishnu/COMPACT/one_ring/include/fold_templates/meerkat_fold_UHF.template --clfd 2.0 --rfi 'kadaneF 8 4 zdot' --pepoch  {row['segment_pepoch']} -n 64 -b 128 -f {' '.join(fil_files)}"
         psrfold_df.loc[idx] = [beam, dm, psrfold_cmd]
         idx+=1
 
