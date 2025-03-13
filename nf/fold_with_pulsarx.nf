@@ -6,9 +6,10 @@ process refold_with_pulsarx {
     container  "${params.psrfold_singular_image}"
     memory '6 GB'
     cpus 4
-    errorStrategy 'ignore'
     executor 'condor'
     cache 'lenient'
+    maxForks 50
+    errorStrategy 'ignore'
 
 
 
@@ -61,8 +62,8 @@ workflow  {
 
    def segment_params_init_ch = Channel.from(segmentParamsList)
 
-   //def flags_ch = ["--nosearch", "--nof1search --nof0search", ""]
-   def flags_ch = [""]
+   def flags_ch = ["--nosearch", "--nof1search --nof0search", ""]
+   //def flags_ch = ["--nosearch"]
    //segment_params_init_ch.view()
 
    def combined_channel = fold_candidate_channel.combine(segment_params_init_ch).combine(flags_ch)
