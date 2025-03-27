@@ -214,6 +214,7 @@ if __name__ == "__main__":
     fold_candidate_df['segment_pepoch'] = fold_candidate_df['foldcand_hex'].apply(lambda x: foldcand_to_fil[x].segment_pepoch if x in foldcand_to_fil else None)
 
     t1_df['fold_ids_hex'] = t1_df['fold_candidate_id_bin'].apply(lambda x: uuid.UUID(x).hex.upper())
+    #original_t1_df = t1_df.copy()
     fold_candidate_df = fold_candidate_df.merge(t1_df[['fold_ids_hex', 'f0_usr', 'f1_user', 'dm_user', 'beam_name']], left_on='foldcand_hex', right_on='fold_ids_hex', how='inner')
 
     #rename user values to search
@@ -227,6 +228,7 @@ if __name__ == "__main__":
     fold_candidate_df.rename(columns={'beam_name': 'beam'}, inplace=True)
 
     print("Successfully merged fold candidate information with XML data")
+
 
     if args.use_search:
 
@@ -286,6 +288,20 @@ if __name__ == "__main__":
         on='beam',
         how='left'
     )
+    lines = []
+    lines.append(",".join(t1_df.columns.to_list()))
+    for index, row in merged_df.iterrows():
+        id = row['foldcand_hex']
+        t1_line = t1_df[t1_df['fold_ids_hex'] == id]
+        t1_line_string = t1_line.to_string(index=False, header=False).replace(" ", ",")
+        lines.append(t1_line_string)
+
+    #write lines to T1_sorted.csv
+    t1_sorted_csv = args.output_root + "/" + 'input_sorted.csv'
+    with open(t1_sorted_csv, 'w') as f:
+        f.write("\n".join(lines))
+
+ 
 
     total_beams = np.unique(np.array(list(chain.from_iterable(overlap_df['all_related_beams']))))
     total_dms = np.unique(merged_df['coherent_dm'])
@@ -324,7 +340,7 @@ if __name__ == "__main__":
         fil_files = glob.glob(f"{beam_root}/*/{beam}/*idm_{dm:09.3f}_{beam}*.fil")
         psrfold_cmd = f"psrfold_fil2 -v --render --candfile {candfile} \
         -z zap 552.0 553.0 -z zap 926.0 927.0 -z zap 934.0 952.0 -z zap 1036.0 1037.0 -z zap 1062.0 1063.0 -z zap 1079.0 1080.0    \
-        --template /b/u/vishnu/COMPACT/one_ring/include/fold_templates/meerkat_fold_UHF.template --clfd 2.0 --rfi 'kadaneF 8 4 zdot' --pepoch  {row['segment_pepoch']} -n 64 -b 128 -f {' '.join(fil_files)}"
+        --template /b/u/vishnu/COMPACT/one_ring/include/fold_templates/meerkat_fold_UHF.template --clfd 2.0 --rfi 'kadaneF 8 4 zdot' --pepoch  {row['segment_pepoch']} -n 64 -b 64 --nbinplan 0.01 128 --cdm {dm} --output_width -f {' '.join(fil_files)} "
         psrfold_df.loc[idx] = [beam, dm, psrfold_cmd]
         idx+=1
 
