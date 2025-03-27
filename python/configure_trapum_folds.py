@@ -13,6 +13,7 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
 import json
+import argparse
 
 def convert_equatorial_coordinate_to_pixel(equatorial_coordinates, bore_sight, utc_time):
 
@@ -115,101 +116,115 @@ class Beam(object):
     
     def __hash__(self):
         return hash(self.name)
-    
-    
 
-compact_meta = parse_meta_file("/b/PROCESSING/01_BEAMFORMED/J0514-4002A/2024-05-19-15:50:23/3HM.meta")
-trapum_meta = parse_meta_file("/bscratch/FOLLOW_UP/NGC1851_metafiles/2022-08-02-06:50:21.meta")
-candidate_df = pd.read_csv('/b/PROCESSING/12_CANDYJAR/3HM_ACCELSEARCH_FULL/TOP_300/classifications/T1_CANDS.csv')
-out_dir = "/bscratch/CaReFuL/3HM_FOLLOW_UP/"
-dm_half_range = 0.2
-dm_tol = 0.05
+#python configure_trapum_folds.py --meta1 "/b/PROCESSING/01_BEAMFORMED/J0514-4002A/2024-05-19-15:50:23/3HM.meta" --meta2 "/bscratch/FOLLOW_UP/NGC1851_metafiles/2022-08-02-06:50:21.meta" --candidate_csv '/b/PROCESSING/12_CANDYJAR/3HM_ACCELSEARCH_FULL/TOP_300/classifications/T1_CANDS.csv' --out_dir "/bscratch/CaReFuL/3HM_FOLLOW_UP/" --dm_half_range 0.2 --dm_tol 0.05    
 
-compact_beams = []
-trapum_beams = []
+if __name__ == "__main__": 
 
-for meta, color, beams in zip([compact_meta, trapum_meta], ['red', 'blue'], [compact_beams, trapum_beams]):
-    boresight = meta["boresight"]
-    utc_start = meta["utc_start"].replace("/", "-").replace(" ", "T")
-    time = Time(utc_start, format='isot', scale='utc')
+    parser = argparse.ArgumentParser(description="Process beamforming metadata and candidate files.")
+    parser.add_argument("--meta1", type=str, required=True, help="Path to the meta file for search observation.")
+    parser.add_argument("--meta2", type=str, required=True, help="Path to the meta file for the follow up observation.")
+    parser.add_argument("--candidate_csv", type=str, required=True, help="Path to the candidate CSV file.")
+    parser.add_argument("--out_dir", type=str, required=True, help="Output directory for results.")
+    parser.add_argument("--dm_half_range", type=float, default=0.2, help="Half range for DM values.")
+    parser.add_argument("--dm_tol", type=float, default=0.05, help="Tolerance for DM values.")
 
-    bore_coords = SkyCoord(frame='icrs',
-                        ra=boresight.split(",")[2].strip(),
-                        dec=boresight.split(",")[3].strip(),
-                        unit=(u.hourangle, u.deg))
+    args = parser.parse_args()
 
+    compact_meta = parse_meta_file(args.meta1)
+    trapum_meta = parse_meta_file(args.meta2)
+    candidate_df = pd.read_csv(args.candidate_csv)
+    out_dir = args.out_dir
+    dm_half_range = args.dm_half_range
+    dm_tol = args.dm_tol
 
-    beamshape_json = json.loads(compact_meta["beamshape"])
-    x = beamshape_json["x"]
-    y =beamshape_json["y"]
-    angle = beamshape_json["angle"]
-    bore_pixel_coordinates = convert_equatorial_coordinate_to_pixel(
-            bore_coords, bore_coords, time
-        )
-    bore_pixel_ra = bore_coords.ra.deg + bore_pixel_coordinates[0][0]
-    bore_pixel_dec = bore_coords.dec.deg + bore_pixel_coordinates[0][1]
+  
 
-    for beam in meta["beams"]:
-        if "ifbf" in beam:
-            continue
-        beam_values = meta["beams"][beam]
-        beam_coords = SkyCoord(frame='icrs',
-                        ra=beam_values.split(",")[2].strip(),
-                        dec=beam_values.split(",")[3].strip(),
-                        unit=(u.hourangle, u.deg))
-        pixel_coordinates = convert_equatorial_coordinate_to_pixel(
-                    beam_coords, bore_coords, time
-                )
-        pixel_ra = bore_coords.ra.deg + pixel_coordinates[0][0]
-        pixel_dec = bore_coords.dec.deg + pixel_coordinates[0][1]
-        beams.append(Beam(beam, utc_start, beam_coords.ra.deg, beam_coords.dec.deg, pixel_ra, pixel_dec, x, y, angle))
+    compact_beams = []
+    trapum_beams = []
+
+    for meta, color, beams in zip([compact_meta, trapum_meta], ['red', 'blue'], [compact_beams, trapum_beams]):
+        boresight = meta["boresight"]
+        utc_start = meta["utc_start"].replace("/", "-").replace(" ", "T")
+        time = Time(utc_start, format='isot', scale='utc')
+
+        bore_coords = SkyCoord(frame='icrs',
+                            ra=boresight.split(",")[2].strip(),
+                            dec=boresight.split(",")[3].strip(),
+                            unit=(u.hourangle, u.deg))
 
 
-for compact_beam in compact_beams:
-    overlapping_beams = [other_beam if discrete_overlap(compact_beam, other_beam) else None for other_beam in trapum_beams]
-    #remove Nones if they exist
-    overlapping_beams = [beam for beam in overlapping_beams if beam]
-    compact_beam.add_overlapping_beams(overlapping_beams)
-    print(compact_beam, ",".join([b.name for b in overlapping_beams]))
+        beamshape_json = json.loads(compact_meta["beamshape"])
+        x = beamshape_json["x"]
+        y =beamshape_json["y"]
+        angle = beamshape_json["angle"]
+        bore_pixel_coordinates = convert_equatorial_coordinate_to_pixel(
+                bore_coords, bore_coords, time
+            )
+        bore_pixel_ra = bore_coords.ra.deg + bore_pixel_coordinates[0][0]
+        bore_pixel_dec = bore_coords.dec.deg + bore_pixel_coordinates[0][1]
+
+        for beam in meta["beams"]:
+            if "ifbf" in beam:
+                continue
+            beam_values = meta["beams"][beam]
+            beam_coords = SkyCoord(frame='icrs',
+                            ra=beam_values.split(",")[2].strip(),
+                            dec=beam_values.split(",")[3].strip(),
+                            unit=(u.hourangle, u.deg))
+            pixel_coordinates = convert_equatorial_coordinate_to_pixel(
+                        beam_coords, bore_coords, time
+                    )
+            pixel_ra = bore_coords.ra.deg + pixel_coordinates[0][0]
+            pixel_dec = bore_coords.dec.deg + pixel_coordinates[0][1]
+            beams.append(Beam(beam, utc_start, beam_coords.ra.deg, beam_coords.dec.deg, pixel_ra, pixel_dec, x, y, angle))
 
 
-#convert this into a map of rows for each beam_id value inside candidate_df so that I get a dataframe of candidates for each beam
-beam_candidate_map = {}
-for index, row in candidate_df.iterrows():
-    beam_name = row["beam_name"]
-    if beam_name not in beam_candidate_map:
-        beam_candidate_map[beam_name] = []
-    beam_candidate_map[beam_name].append(row)
-    
-for beam_name in beam_candidate_map:
-    compact_beam = [beam for beam in compact_beams if beam.name == beam_name][0]
-    overlapping_beams = compact_beam.overlapping_beams
-    candidate_df = pd.DataFrame(beam_candidate_map[beam_name])
-    dm_list= []
+    for compact_beam in compact_beams:
+        overlapping_beams = [other_beam if discrete_overlap(compact_beam, other_beam) else None for other_beam in trapum_beams]
+        #remove Nones if they exist
+        overlapping_beams = [beam for beam in overlapping_beams if beam]
+        compact_beam.add_overlapping_beams(overlapping_beams)
+        print(compact_beam, ",".join([b.name for b in overlapping_beams]))
 
-    for dm in candidate_df['dm_opt'].values:
-        dm_range = np.arange(dm - dm_half_range, dm + dm_half_range, dm_tol)
-        dm_list.extend(dm_range)
-    dm_list = sorted(set([f"{dm:.2f}" for dm in dm_list]))
-    print(len(dm_list), dm_list)
 
-    for overlapping_beam in overlapping_beams:
-        beam_dir = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}"
-        if not os.path.exists(beam_dir):
-            os.makedirs(beam_dir)
-        dm_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/dm.file"
-        with open(dm_file, 'w') as f:
-            f.write("\n".join(dm_list))
-        print(f"Written {dm_file}")
-
-        cand_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/input.candfile"
-        with open(cand_file, 'w') as cand_file_writer:
-            cand_file_writer.write("#id DM accel F0 F1 F2 S/N\n")
-            for i, row in candidate_df.iterrows():
-                cand_file_writer.write(f"{i} {row['dm_opt']} {row['acc_opt']} {row['f0_opt']} 0 0 {row['sn_fold']}\n")
-
-    
+    #convert this into a map of rows for each beam_id value inside candidate_df so that I get a dataframe of candidates for each beam
+    beam_candidate_map = {}
+    for index, row in candidate_df.iterrows():
+        beam_name = row["beam_name"]
+        if beam_name not in beam_candidate_map:
+            beam_candidate_map[beam_name] = []
+        beam_candidate_map[beam_name].append(row)
         
+    for beam_name in beam_candidate_map:
+        compact_beam = [beam for beam in compact_beams if beam.name == beam_name][0]
+        overlapping_beams = compact_beam.overlapping_beams
+        candidate_df = pd.DataFrame(beam_candidate_map[beam_name])
+        dm_list= []
+
+        for dm in candidate_df['dm_opt'].values:
+            dm_range = np.arange(dm - dm_half_range, dm + dm_half_range, dm_tol)
+            dm_list.extend(dm_range)
+        dm_list = sorted(set([f"{dm:.2f}" for dm in dm_list]))
+        print(len(dm_list), dm_list)
+
+        for overlapping_beam in overlapping_beams:
+            beam_dir = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}"
+            if not os.path.exists(beam_dir):
+                os.makedirs(beam_dir)
+            dm_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/dm.file"
+            with open(dm_file, 'w') as f:
+                f.write("\n".join(dm_list))
+            print(f"Written {dm_file}")
+
+            cand_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/input.candfile"
+            with open(cand_file, 'w') as cand_file_writer:
+                cand_file_writer.write("#id DM accel F0 F1 F2 S/N\n")
+                for i, row in candidate_df.iterrows():
+                    cand_file_writer.write(f"{i} {row['dm_opt']} {row['acc_opt']} {row['f0_opt']} 0 0 {row['sn_fold']}\n")
+
+        
+            
 
 
 
