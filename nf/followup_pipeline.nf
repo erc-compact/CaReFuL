@@ -8,17 +8,17 @@ process filtool {
     container "${params.apptainer_images.pulsarx}"
 
     input:
-    tuple path(root_dir), path(candFile), path(dmFile), val(filterbanksList), val(idx)
+    tuple path(root_dir), path(candFile), path(dmFile), val(filterbanksList), val(baseName)
 
     output:
     tuple path(root_dir), path(candFile), path(dmFile), path("*.fil")
 
-    beforeScript "eval \$(ssh-agent -s) && ssh-add ~/.ssh/hercules && if [ ! -f  /tmp/${idx}/TRAPUM_ARCHIVE/link.exists ]; then mkdir -p /tmp/${idx}; sshfs archive:/p/MFR/MEERKAT/TRAPUM /tmp/${idx}/ -o reconnect -o ro; fi"
+    beforeScript "eval \$(ssh-agent -s) && ssh-add ~/.ssh/hercules && if [ ! -f  /tmp/${baseName}/TRAPUM_ARCHIVE/link.exists ]; then mkdir -p /tmp/${baseName}; sshfs archive:/p/MFR/MEERKAT/TRAPUM /tmp/${baseName}/ -o reconnect -o ro; fi"
 
 
     script:
     filterbankFiles = filterbanksList.join(" ")
-    filterbankFiles = filterbankFiles.replaceAll("UUID", "${idx}")
+    filterbankFiles = filterbankFiles.replaceAll("/TMP/", "/tmp/${baseName}")
     """
     #!/bin/bash
     workdir=\$(pwd)
@@ -39,8 +39,8 @@ process filtool {
     fi
     cd \${workdir}
     ln -s \${publish_dir}/\${filtool_output} \${filtool_output}
-    fusermount -u /tmp/${idx}
-    echo "Unmounted /tmp/${idx}"
+    fusermount -u /tmp/${baseName}
+    echo "Unmounted /tmp/${baseName}"
     """
 }
 
@@ -117,23 +117,34 @@ process peasoup {
 
 
     #cp /scratch/vkrishna/COMPACT/code/CaReFuL/nf/work/3c/a6b6560b2bce40c1e6fdb0aa3c8382/overview.xml . 
+
+    if [ ! -f ${root_dir}/02_SEARCH/overview.xml ]; then
+        echo "Running peasoup on ${filterbankFile}"
+        peasoup -i ${filterbankFile} \
+        --acc_start \${acc_start} \
+        --acc_end \${acc_end} \
+        --acc_tol ${params.peasoup.accel_tol} \
+        -m ${params.peasoup.min_snr} \
+        --ram_limit_gb ${params.peasoup.ram_limit_gb} \
+        --nharmonics ${params.peasoup.nh} \
+        --limit ${params.peasoup.total_cands} \
+        --fft_size ${fft_size} \
+        --start_sample ${params.peasoup.start_sample} \
+        --cdm ${params.peasoup.coherent_dm} \
+        \${optional_args} \
+        --dm_file ${dmFile} \
+        -o .
+        mkdir -p ${root_dir}/02_SEARCH/
+        cp overview.xml ${root_dir}/02_SEARCH/
+
+    else
+        echo "Peasoup output already exists, skipping peasoup step"
+        cp ${root_dir}/02_SEARCH/ overview.xml 
+    fi
      
 
-    peasoup -i ${filterbankFile} \
-    --acc_start \${acc_start} \
-    --acc_end \${acc_end} \
-    --acc_tol ${params.peasoup.accel_tol} \
-    -m ${params.peasoup.min_snr} \
-    --ram_limit_gb ${params.peasoup.ram_limit_gb} \
-    --nharmonics ${params.peasoup.nh} \
-    --limit ${params.peasoup.total_cands} \
-    --fft_size ${fft_size} \
-    --start_sample ${params.peasoup.start_sample} \
-    --cdm ${params.peasoup.coherent_dm} \
-    \${optional_args} \
-    --dm_file ${dmFile} \
-    -o .
-   
+    
+    
     """
 }
 
@@ -205,20 +216,23 @@ process fold_with_pulsarx {
 
 workflow {
 
-    Channel.fromPath("/scratch/vkrishna/COMPACT/FOLLOW_UP/3HM_FOLLOW_UP/2021-01-15-15:01:25/cfbf*/", type: 'dir')
+    Channel.fromPath("/scratch/vkrishna/COMPACT/FOLLOW_UP/3HM_FOLLOW_UP/2021-05-21-06:03:53/cfbf*/", type: 'dir')
             .map {
                 dir ->
                 def candFile = dir + "/input.candfile"
                 def dmFile = dir + "/input.dmfile"
                 def filterbankListFile = dir + "/input_fil.list"
                 def filterbanksList = filterbankListFile.readLines()
-                def UUID = UUID.randomUUID().toString()
+                if(filterbanksList.size() == 0) {
+                   return null
+                }
+                def baseName = filterbanksList[0].tokenize("/").last().tokenize(".").first()
                 return tuple(
                     dir,
                     candFile,
                     dmFile,
                     filterbanksList,
-                    UUID
+                    baseName
                 )
             }.set { inputFiles }
 
