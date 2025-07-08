@@ -139,12 +139,19 @@ class Beam(object):
         self.pid = pid
         self.freq = freq
         self.target = target
+        self.candidates = []
     
     def add_overlapping_beams(self, beams):
         self.overlapping_beams.extend(beams)
     
     def add_filterbanks(self, filterbanks):
         self.filterbank_list.extend(filterbanks)
+
+    def add_candidates(self, candidates):
+        self.candidates.extend(candidates)
+
+    def add_candidate(self, candidate):
+        self.candidates.append(candidate)
     
     def __str__(self):
         return f"Beam {self.name} "
@@ -211,7 +218,7 @@ if __name__ == "__main__":
                             unit=(u.hourangle, u.deg))
 
 
-        beamshape_json = json.loads(compact_meta["beamshape"])
+        beamshape_json = json.loads(meta["beamshape"])
         x = beamshape_json["x"]
         y =beamshape_json["y"]
         angle = beamshape_json["angle"]
@@ -265,27 +272,36 @@ if __name__ == "__main__":
         ax.set_ylim(bore_pixel_dec - extent, bore_pixel_dec + extent)
         plt.savefig(f"{utc_dir}/beams_ex_{extent}.pdf", bbox_inches='tight')
 
-
-    for compact_beam in compact_beams:
-        overlapping_beams = [other_beam if discrete_overlap(compact_beam, other_beam) else None for other_beam in trapum_beams]
-        #remove Nones if they exist
+    for trapum_beam in trapum_beams:
+        overlapping_beams = [other_beam if discrete_overlap(trapum_beam, other_beam) else None for other_beam in compact_beams]
         overlapping_beams = [beam for beam in overlapping_beams if beam]
-        compact_beam.add_overlapping_beams(overlapping_beams)
-        print(compact_beam, ",".join([b.name for b in overlapping_beams]))
+        trapum_beam.add_overlapping_beams(overlapping_beams)
+        print(trapum_beam, ",".join([b.name for b in overlapping_beams]))
 
 
-    #convert this into a map of rows for each beam_id value inside candidate_df so that I get a dataframe of candidates for each beam
-    beam_candidate_map = {}
+    # for compact_beam in compact_beams:
+    #     overlapping_beams = [other_beam if discrete_overlap(compact_beam, other_beam) else None for other_beam in trapum_beams]
+    #     #remove Nones if they exist
+    #     overlapping_beams = [beam for beam in overlapping_beams if beam]
+    #     compact_beam.add_overlapping_beams(overlapping_beams)
+    #     print(compact_beam, ",".join([b.name for b in overlapping_beams]))
+
     for index, row in candidate_df.iterrows():
         beam_name = row["beam_name"]
-        if beam_name not in beam_candidate_map:
-            beam_candidate_map[beam_name] = []
-        beam_candidate_map[beam_name].append(row)
+        beam = [beam for beam in compact_beams if beam.name == beam_name][0]
+        beam.add_candidate(row)
+
+    for trapum_beam in trapum_beams:
+        overlapping_beams = trapum_beam.overlapping_beams
+        if len(overlapping_beams) == 0:
+            continue
+        all_candidates = []
+        for compact_beam in overlapping_beams:
+            all_candidates.extend(compact_beam.candidates)
         
-    for beam_name in beam_candidate_map:
-        compact_beam = [beam for beam in compact_beams if beam.name == beam_name][0]
-        overlapping_beams = compact_beam.overlapping_beams
-        candidate_df = pd.DataFrame(beam_candidate_map[beam_name])
+        candidate_df = pd.DataFrame(all_candidates)
+        if len(candidate_df) == 0:
+            continue
         dm_list= []
 
         for dm in candidate_df['dm_opt'].values:
@@ -294,38 +310,101 @@ if __name__ == "__main__":
         dm_list = sorted(set([f"{dm:.2f}" for dm in dm_list]))
         print(len(dm_list), dm_list)
 
-        for overlapping_beam in overlapping_beams:
-            beam_dir = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}"
-            if not os.path.exists(beam_dir):
+        beam_dir = f"{out_dir}/{trapum_beam.utc}/{trapum_beam.name}"
+        if not os.path.exists(beam_dir):
                 os.makedirs(beam_dir)
-            dm_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/input.dmfile"
-            with open(dm_file, 'w') as f:
-                f.write("\n".join(dm_list))
-            print(f"Written {dm_file}")
 
-            cand_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/input.candfile"
-            with open(cand_file, 'w') as cand_file_writer:
-                cand_file_writer.write("#id DM accel F0 F1 F2 S/N\n")
-                for i, row in candidate_df.iterrows():
-                    cand_file_writer.write(f"{i} {row['dm_opt']} {row['acc_opt']} {row['f0_opt']} 0 0 {row['sn_fold']}\n")
+        dm_file = f"{out_dir}/{trapum_beam.utc}/{trapum_beam.name}/input.dmfile"
+        with open(dm_file, 'w') as f:
+            f.write("\n".join(dm_list))
+        print(f"Written {dm_file}")
+
+        cand_file = f"{out_dir}/{trapum_beam.utc}/{trapum_beam.name}/input.candfile"
+        with open(cand_file, 'w') as cand_file_writer:
+            cand_file_writer.write("#id DM accel F0 F1 F2 S/N\n")
+            for i, row in candidate_df.iterrows():
+                cand_file_writer.write(f"{i} {row['dm_opt']} {row['acc_opt']} {row['f0_opt']} 0 0 {row['sn_fold']}\n")
+        print(f"Written {cand_file}")
             
-            if data_root:
-                data_dir_glob_str = f"{data_root}/*/*/{overlapping_beam.pid}/{overlapping_beam.target}/{overlapping_beam.utc}/{overlapping_beam.freq}"
-                data_dirs = glob.glob(data_dir_glob_str)
-                filterbanks = []
-                for data_dir in data_dirs:
-                    filterbanks.extend(glob.glob(f"{data_dir}/{beam}/*.fil"))
-                
-                filterbanks = sorted(set(filterbanks))
-                print("Filterbanks: ", filterbanks)
-                overlapping_beam.add_filterbanks(filterbanks)
+        # do not use target name as that changes between cluster name and A pulsar name. Also individual pulsar beams have different name. 
+        if data_root:
+            data_dir_glob_str = f"{data_root}/*/*/{trapum_beam.pid}/*/{trapum_beam.utc}/{trapum_beam.freq}/{trapum_beam.name}/*.fil"
+            print("Data glob: ", data_dir_glob_str)
+            filterbanks =  sorted(set(glob.glob(data_dir_glob_str)))                
+            print("Filterbanks: ", filterbanks)
+            trapum_beam.add_filterbanks(filterbanks)
 
-                with open(f"{beam_dir}/input_fil.list", 'w') as filterbank_file:
-                    for filterbank in filterbanks:
-                        print(filterbank, data_root)
-                        filterbank = filterbank.replace(data_root, "/tmp/UUID/")
-                        filterbank_file.write(f"{filterbank}\n")
-                print(f"Written {beam_dir}/input_fil.list")
+            with open(f"{beam_dir}/input_fil.list", 'w') as filterbank_file:
+                for filterbank in filterbanks:
+                    print(filterbank, data_root)
+                    filterbank = filterbank.replace(data_root, "/TMP/")
+                    filterbank_file.write(f"{filterbank}\n")
+            print(f"Written {beam_dir}/input_fil.list")
+        
+
+
+
+
+    #convert this into a map of rows for each beam_id value inside candidate_df so that I get a dataframe of candidates for each beam
+    # beam_candidate_map = {}
+    # for index, row in candidate_df.iterrows():
+    #     beam_name = row["beam_name"]
+    #     if beam_name not in beam_candidate_map:
+    #         beam_candidate_map[beam_name] = []
+    #     beam_candidate_map[beam_name].append(row)
+        
+    # for beam_name in beam_candidate_map:
+    #     compact_beam = [beam for beam in compact_beams if beam.name == beam_name][0]
+    #     overlapping_beams = compact_beam.overlapping_beams
+    #     candidate_df = pd.DataFrame(beam_candidate_map[beam_name])
+    #     print(beam_name, "overlapping beams: ", [b.name for b in overlapping_beams], "candidate_df elements: ", len(candidate_df))
+    #     for _, row in candidate_df.iterrows():
+    #         print(row['dm_opt'], row['acc_opt'], row['f0_opt'], row['sn_fold'])
+        
+
+    #     dm_list= []
+
+    #     for dm in candidate_df['dm_opt'].values:
+    #         dm_range = np.arange(dm - dm_half_range, dm + dm_half_range, dm_tol)
+    #         dm_list.extend(dm_range)
+    #     dm_list = sorted(set([f"{dm:.2f}" for dm in dm_list]))
+    #     print(len(dm_list), dm_list)
+
+    #     print("Overlapping beams: ", [b.name for b in overlapping_beams])
+        
+
+
+
+    #     for overlapping_beam in overlapping_beams:
+    #         beam_dir = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}"
+    #         if not os.path.exists(beam_dir):
+    #             os.makedirs(beam_dir)
+    #         dm_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/input.dmfile"
+    #         with open(dm_file, 'w') as f:
+    #             f.write("\n".join(dm_list))
+    #         print(f"Written {dm_file}")
+
+    #         cand_file = f"{out_dir}/{overlapping_beam.utc}/{overlapping_beam.name}/input.candfile"
+    #         with open(cand_file, 'w') as cand_file_writer:
+    #             cand_file_writer.write("#id DM accel F0 F1 F2 S/N\n")
+    #             for i, row in candidate_df.iterrows():
+    #                 cand_file_writer.write(f"{i} {row['dm_opt']} {row['acc_opt']} {row['f0_opt']} 0 0 {row['sn_fold']}\n")
+    #         print(f"Written {cand_file}")
+            
+    #         # do not use target name as that changes between cluster name and A pulsar name. Also individual pulsar beams have different name. 
+    #         if data_root:
+    #             data_dir_glob_str = f"{data_root}/*/*/{overlapping_beam.pid}/*/{overlapping_beam.utc}/{overlapping_beam.freq}/{overlapping_beam.name}/*.fil"
+    #             print("Data glob: ", data_dir_glob_str)
+    #             filterbanks =  sorted(set(glob.glob(data_dir_glob_str)))                
+    #             print("Filterbanks: ", filterbanks)
+    #             overlapping_beam.add_filterbanks(filterbanks)
+
+    #             with open(f"{beam_dir}/input_fil.list", 'w') as filterbank_file:
+    #                 for filterbank in filterbanks:
+    #                     print(filterbank, data_root)
+    #                     filterbank = filterbank.replace(data_root, "/tmp/UUID/")
+    #                     filterbank_file.write(f"{filterbank}\n")
+    #             print(f"Written {beam_dir}/input_fil.list")
 
 
 
